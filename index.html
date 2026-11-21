@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>신혼집 평면 모델러</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="row" style="gap:10px"><h1>신혼집 평면 모델러</h1><span class="mode" id="mode">로컬</span></div>
+    <p class="sub">추정 평면도를 방 단위로 그려 두고, 현장 사진을 찍은 위치와 방향에 핀으로 꽂아요. 실측한 치수를 넣으면 그 방이 실측값으로 바뀌고, 오른쪽·뒤쪽에 붙은 방도 같이 밀려서 전체가 맞춰져요. 점선 테두리는 추정, 진한 초록 테두리는 실측이에요.</p>
+  </header>
+  <div class="bar" role="group" aria-label="보기">
+    <button class="tab" type="button" id="v-1" data-v="1" aria-pressed="true">1층 평면</button>
+    <button class="tab" type="button" id="v-2" data-v="2" aria-pressed="false">2층 평면</button>
+    <button class="tab" type="button" id="v-3d" data-v="3d" aria-pressed="false">3D</button>
+    <span style="width:8px"></span>
+    <button class="btn" type="button" id="addRoom">+ 방 추가</button>
+    <button class="btn" type="button" id="exportJson">데이터 내보내기</button>
+    <label class="btn filebtn" for="importJson">데이터 불러오기<input type="file" id="importJson" accept="application/json,.json"></label>
+    <span class="status" id="status" aria-live="polite">불러오는 중…</span>
+  </div>
+  <div class="main">
+    <div class="stage" id="stage">
+      <svg id="plan" aria-label="평면도"></svg>
+      <div id="three" hidden></div>
+      <div class="hint" id="hint"></div>
+    </div>
+    <div class="side">
+      <section class="panel"><h2>요약</h2><div class="kv" id="summary"></div></section>
+      <section class="panel"><h2>선택한 방</h2><div id="insp"></div></section>
+      <section class="panel">
+        <h2>방 목록</h2>
+        <div class="tblwrap"><table class="rooms"><thead><tr><th>층</th><th>이름</th><th>가로</th><th>세로</th><th>㎡</th><th>상태</th></tr></thead><tbody id="roomList"></tbody></table></div>
+      </section>
+    </div>
+  </div>
+  <section class="panel">
+    <div class="row" style="justify-content:space-between;margin-bottom:6px">
+      <h2 style="margin:0">현장 사진 <span class="muted" id="phCount" style="font-weight:400;font-size:.85rem"></span></h2>
+      <div class="row">
+        <label class="btn filebtn" for="photoFiles">사진 파일 선택<input type="file" id="photoFiles" accept="image/*" multiple></label>
+        <button class="tab" type="button" data-pf="all" aria-pressed="true">전체</button>
+        <button class="tab" type="button" data-pf="1층" aria-pressed="false">1층</button>
+        <button class="tab" type="button" data-pf="2층" aria-pressed="false">2층</button>
+        <button class="tab" type="button" data-pf="외부" aria-pressed="false">외부</button>
+        <button class="tab" type="button" data-pf="un" aria-pressed="false">안 꽂은 것</button>
+      </div>
+    </div>
+    <div class="strip" id="strip"></div>
+    <div id="phInfo" class="empty-note" style="margin-top:6px">사진을 누르면 선택돼요. 선택한 상태로 평면을 누르면 핀이 꽂히고, 한 번 더 누르면 바라본 방향이 정해져요. 두 번 누르면 크게 보여요. 사진이 회색 칸으로 보이면 “사진 파일 선택”으로 원본 사진들을 한 번에 골라 주세요.</div>
+  </section>
+</div>
+<dialog id="lb"><div class="lbx"><img id="lbimg" alt=""><p id="lbcap"></p></div></dialog>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="store.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
