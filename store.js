@@ -133,12 +133,12 @@
     // ---------- photos ----------
     async photoUrl(file) {
       if (mode !== "shared") return null;
-      const { data, error } = await sb.storage.from(cfg.PHOTO_BUCKET || "photos").createSignedUrl(project + "/" + file, 3600);
+      const { data, error } = await sb.storage.from(cfg.PHOTO_BUCKET || "photos").createSignedUrl(project + "/" + file, 604800);
       return error ? null : data.signedUrl;
     },
     async photoUrls(files) {
       if (mode !== "shared") return {};
-      const { data, error } = await sb.storage.from(cfg.PHOTO_BUCKET || "photos").createSignedUrls(files.map((f) => project + "/" + f), 3600);
+      const { data, error } = await sb.storage.from(cfg.PHOTO_BUCKET || "photos").createSignedUrls(files.map((f) => project + "/" + f), 604800);
       if (error || !data) return {};
       const out = {};
       data.forEach((d, i) => { if (d.signedUrl && !d.error) out[files[i]] = d.signedUrl; });

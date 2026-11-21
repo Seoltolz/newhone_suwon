@@ -3,7 +3,7 @@ let PH={};
 const IMG={}; // photo id -> object/signed URL
 const SNAP=0.05, AREA_REG=75;
 let rooms={}, pins={}, meta={h1:2.6,h2:2.6,slab:0.2,lotW:12,lotD:13};
-let view="1", sel=null, selPhoto=null, pinStage=null, phFilter="all";
+let view="1", sel=null, selSet=new Set(), selPhoto=null, pinStage=null, phFilter="all";
 const st=document.getElementById('status');
 const svg=document.getElementById('plan');
 const NS="http://www.w3.org/2000/svg";
@@ -12,11 +12,35 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 /* ---------- writes (store.js가 로컬/공유 저장을 처리) ---------- */
-function save(col,id,patch,mode="update"){ if(mode==="set")Store.put(col,id,patch); else Store.patch(col,id,patch); }
-function remove(col,id){ Store.del(col,id); }
+// 실행취소: 한 번의 조작(같은 틱 안의 저장들)을 한 묶음으로 기록해요. 다른 사람이 고친 건 건드리지 않아요.
+const UNDO=[], REDO=[]; let curAct=null, replaying=false;
+const raw=(col,id)=>{const s=Store.get();const v=col==="meta"?s.meta:s[col][id];return v===undefined?undefined:JSON.parse(JSON.stringify(v));};
+function rec(col,id){
+  if(replaying)return;
+  if(!curAct){curAct=[];UNDO.push(curAct);if(UNDO.length>200)UNDO.shift();REDO.length=0;setTimeout(()=>{curAct=null;updUndoBtns();},0);}
+  if(!curAct.some(c=>c.col===col&&c.id===id))curAct.push({col,id,before:raw(col,id)});
+}
+function save(col,id,patch,mode="update"){ rec(col,id); if(mode==="set")Store.put(col,id,patch); else Store.patch(col,id,patch); }
+function remove(col,id){ rec(col,id); Store.del(col,id); }
+function replay(from,to){
+  const act=from.pop(); if(!act)return false;
+  replaying=true; const back=[];
+  act.forEach(c=>{back.push({col:c.col,id:c.id,before:raw(c.col,c.id)});
+    if(c.before===undefined)Store.del(c.col,c.id); else Store.put(c.col,c.id,c.before);});
+  replaying=false; to.push(back); updUndoBtns(); return true;
+}
+function undo(){ if(replay(UNDO,REDO))st.textContent="되돌렸어요"; else st.textContent="되돌릴 게 없어요"; }
+function redo(){ if(replay(REDO,UNDO))st.textContent="다시 했어요"; }
+function updUndoBtns(){const u=document.getElementById('undo'),r=document.getElementById('redo');if(u)u.disabled=!UNDO.length;if(r)r.disabled=!REDO.length;}
 
 /* ---------- plan geometry ---------- */
 function floorRooms(f){return Object.entries(rooms).filter(([,r])=>String(r.floor)===f).map(([id,r])=>({id,...r}));}
+// 대지 요소(담장·마당·주차 등)는 floor:"site" 인 방으로 저장해요. 1층 평면에서 고쳐요.
+const SITE={wall:{label:"담장",fill:"rgba(150,70,45,.75)",c3:0x96462d,h:1.8},yard:{label:"마당",fill:"rgba(107,123,69,.20)",c3:0x8fa35a,h:0},parking:{label:"주차",fill:"rgba(120,120,120,.22)",c3:0x8a8a8a,h:0},stair:{label:"외부계단",fill:"rgba(120,100,80,.30)",c3:0x8a6f55,h:0},etc:{label:"기타",fill:"rgba(160,140,110,.22)",c3:0xa08c6e,h:0}};
+const siteOf=r=>SITE[r.type]||SITE.etc;
+const editFloor=()=>view==="3d"?"1":view;
+// 선택 가능 = 지금 층의 방 + (1층일 때) 대지 요소
+const selectable=id=>{const r=rooms[id];return r&&(String(r.floor)===view||(r.floor==="site"&&view==="1"));};
 function extent(){
   let maxX=meta.lotW||12,maxY=meta.lotD||13;
   Object.values(rooms).forEach(r=>{maxX=Math.max(maxX,r.x+r.w+1);maxY=Math.max(maxY,r.y+r.d+1);});
@@ -26,6 +50,10 @@ let vb=null;
 function toSvgPt(ev){const p=svg.createSVGPoint();p.x=ev.clientX;p.y=ev.clientY;const q=p.matrixTransform(svg.getScreenCTM().inverse());return {x:q.x,y:-q.y};}
 // plan coords: x to the right (정면 기준 왼쪽→오른쪽), y from front (도로, 0) to back. SVG y is flipped so the street is at the bottom.
 function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+function handles(r,grp){
+  [["e",r.x+r.w,r.y+r.d/2],["w",r.x,r.y+r.d/2],["n",r.x+r.w/2,r.y+r.d],["s",r.x+r.w/2,r.y]].forEach(([h,x,y])=>
+    el("circle",{cx:x,cy:-y,r:0.16,fill:cssv('--sel'),stroke:cssv('--surface'),"stroke-width":0.04,"data-h":h,style:`cursor:${h==="e"||h==="w"?"ew":"ns"}-resize`},grp));
+}
 function renderPlan(){
   if(view==="3d")return;
   const ex=extent(); svg.innerHTML="";
@@ -36,6 +64,15 @@ function renderPlan(){
   // street marker + lot outline
   el("rect",{x:0,y:-(meta.lotD||13),width:meta.lotW||12,height:meta.lotD||13,fill:"none",stroke:cssv('--ext'),"stroke-width":0.05,"stroke-dasharray":"0.3 0.15"},g);
   const t=el("text",{x:(meta.lotW||12)/2,y:1.4,"text-anchor":"middle","font-size":0.45,fill:cssv('--muted'),"font-family":"IBM Plex Sans KR, sans-serif"},g);t.textContent="▼ 도로 (정면) · 대지 경계는 가정값";
+  floorRooms("site").forEach(r=>{
+    const live=view==="1", k=siteOf(r);
+    const grp=el("g",live?{"data-room":r.id,style:"cursor:move"}:{opacity:.35,"pointer-events":"none"},g);
+    el("rect",{x:r.x,y:-(r.y+r.d),width:r.w,height:r.d,fill:k.fill,stroke:r.type==="wall"?"none":cssv('--ext'),"stroke-width":0.03,"stroke-dasharray":"0.15 0.1"},grp);
+    if(r.type==="parking")el("text",{x:r.x+r.w/2,y:-(r.y+r.d/2)+0.35,"text-anchor":"middle","font-size":Math.min(1.2,r.w*0.6),"font-weight":700,fill:cssv('--muted'),opacity:.5,"pointer-events":"none"},grp).textContent="P";
+    if(r.type!=="wall"||Math.max(r.w,r.d)>1.5){const lab=el("text",{x:r.x+r.w/2,y:-(r.y+r.d/2)-(r.type==="wall"?0.25:0.1),"text-anchor":"middle","font-size":0.28,fill:cssv('--muted'),"font-family":"IBM Plex Sans KR, sans-serif","pointer-events":"none"},grp);lab.textContent=r.name||k.label;}
+    if(live&&selSet.has(r.id))el("rect",{x:r.x,y:-(r.y+r.d),width:r.w,height:r.d,fill:"none",stroke:cssv('--sel'),"stroke-width":0.08},grp);
+    if(live&&sel===r.id&&selSet.size<=1)handles(r,grp);
+  });
   const other=view==="1"?"2":"1";
   floorRooms(other).forEach(r=>el("rect",{x:r.x,y:-(r.y+r.d),width:r.w,height:r.d,fill:"none",stroke:cssv('--muted'),"stroke-width":0.03,"stroke-dasharray":"0.1 0.1",opacity:.5},g));
   const fc=view==="1"?cssv('--f1'):cssv('--f2'), ff=view==="1"?cssv('--f1-fill'):cssv('--f2-fill');
@@ -46,14 +83,11 @@ function renderPlan(){
     // four edges: solid green if that dimension is measured
     const edges=[[r.x,r.y,r.x+r.w,r.y,m.w],[r.x,r.y+r.d,r.x+r.w,r.y+r.d,m.w],[r.x,r.y,r.x,r.y+r.d,m.d],[r.x+r.w,r.y,r.x+r.w,r.y+r.d,m.d]];
     edges.forEach(([a,b,c,d,ms])=>el("line",{x1:a,y1:-b,x2:c,y2:-d,stroke:ms?cssv('--meas'):fc,"stroke-width":ms?0.09:0.05,"stroke-dasharray":ms?"":"0.18 0.1"},grp));
-    if(sel===r.id)el("rect",{x:r.x,y:-(r.y+r.d),width:r.w,height:r.d,fill:"none",stroke:cssv('--sel'),"stroke-width":0.08},grp);
+    if(selSet.has(r.id))el("rect",{x:r.x,y:-(r.y+r.d),width:r.w,height:r.d,fill:"none",stroke:cssv('--sel'),"stroke-width":0.08},grp);
     const fs=Math.max(0.22,Math.min(0.38,r.w/7));
     const lab=el("text",{x:r.x+r.w/2,y:-(r.y+r.d/2)-fs*0.2,"text-anchor":"middle","font-size":fs,"font-weight":700,fill:cssv('--fg'),"font-family":"IBM Plex Sans KR, sans-serif","pointer-events":"none"},grp);lab.textContent=r.name||"방";
     const dim=el("text",{x:r.x+r.w/2,y:-(r.y+r.d/2)+fs*1.0,"text-anchor":"middle","font-size":fs*0.75,fill:cssv('--muted'),"font-family":"IBM Plex Mono, monospace","pointer-events":"none"},grp);dim.textContent=`${r.w.toFixed(2)}×${r.d.toFixed(2)} · ${(r.w*r.d).toFixed(1)}㎡`;
-    if(sel===r.id){
-      [["e",r.x+r.w,r.y+r.d/2],["w",r.x,r.y+r.d/2],["n",r.x+r.w/2,r.y+r.d],["s",r.x+r.w/2,r.y]].forEach(([h,x,y])=>
-        el("circle",{cx:x,cy:-y,r:0.16,fill:cssv('--sel'),stroke:cssv('--surface'),"stroke-width":0.04,"data-h":h,style:`cursor:${h==="e"||h==="w"?"ew":"ns"}-resize`},grp));
-    }
+    if(sel===r.id&&selSet.size<=1)handles(r,grp);
   });
   // pins
   Object.entries(pins).forEach(([id,p])=>{
@@ -69,6 +103,8 @@ function renderPlan(){
     el("circle",{cx:p.x,cy:-p.y,r:0.2,fill:col,stroke:cssv('--surface'),"stroke-width":0.04},pg);
     const tt=el("text",{x:p.x,y:-p.y+0.08,"text-anchor":"middle","font-size":0.17,"font-weight":700,fill:"#fff","font-family":"IBM Plex Mono, monospace","pointer-events":"none"},pg);tt.textContent=id.slice(1);
   });
+  if(drag&&drag.mode==="box"&&drag.cur){const a=drag.start,b=drag.cur;
+    el("rect",{x:Math.min(a.x,b.x),y:-Math.max(a.y,b.y),width:Math.abs(a.x-b.x),height:Math.abs(a.y-b.y),fill:cssv('--sel'),"fill-opacity":.08,stroke:cssv('--sel'),"stroke-width":0.04,"stroke-dasharray":"0.15 0.1"},g);}
   if(pinStage){
     const p=pinStage;
     el("circle",{cx:p.x,cy:-p.y,r:0.22,fill:"none",stroke:cssv('--sel'),"stroke-width":0.06},g);
@@ -78,6 +114,8 @@ function renderPlan(){
 
 /* ---------- plan interaction ---------- */
 let drag=null;
+const pinsOf=ids=>Object.entries(pins).filter(([,p])=>p.room&&ids.has(p.room)).map(([k])=>k);
+function setSel(ids){selSet=new Set(ids);sel=selSet.size===1?[...selSet][0]:(selSet.size?[...selSet][0]:null);}
 svg.addEventListener('pointerdown',ev=>{
   const pt=toSvgPt(ev);
   if(selPhoto){
@@ -90,26 +128,55 @@ svg.addEventListener('pointerdown',ev=>{
     pinStage=null; const next=selPhoto; selPhoto=null; renderAll(); showPhInfo(next); return;
   }
   const h=ev.target.closest('[data-h]'), rg=ev.target.closest('[data-room]'), pg=ev.target.closest('[data-pin]');
-  if(pg){openPhoto(pg.dataset.pin);return;}
+  const add=ev.shiftKey||ev.metaKey||ev.ctrlKey;
+  if(pg&&!add){openPhoto(pg.dataset.pin);return;}
   if(h&&sel){drag={mode:h.dataset.h,id:sel,start:pt,orig:{...rooms[sel]}};svg.setPointerCapture(ev.pointerId);return;}
-  if(rg){sel=rg.dataset.room;drag={mode:"move",id:sel,start:pt,orig:{...rooms[sel]}};svg.setPointerCapture(ev.pointerId);renderAll();return;}
-  sel=null;renderAll();
+  if(rg){
+    const id=rg.dataset.room;
+    if(add){selSet.has(id)?selSet.delete(id):selSet.add(id);setSel(selSet);renderAll();return;}
+    if(!selSet.has(id))setSel([id]); else sel=id;
+    const ids=new Set(selSet), orig={}, porig={};
+    ids.forEach(k=>orig[k]={x:rooms[k].x,y:rooms[k].y});
+    pinsOf(ids).forEach(k=>porig[k]={x:pins[k].x,y:pins[k].y});
+    drag={mode:"move",id,start:pt,ids,orig,porig};svg.setPointerCapture(ev.pointerId);renderAll();return;
+  }
+  // 빈 곳에서 끌면 사각형으로 여러 개 선택
+  drag={mode:"box",start:pt,cur:null,add};svg.setPointerCapture(ev.pointerId);
 });
 svg.addEventListener('pointermove',ev=>{
   const pt=toSvgPt(ev);
   if(pinStage){pinStage.tx=pt.x;pinStage.ty=pt.y;renderPlan();return;}
   if(!drag)return;
-  const dx=pt.x-drag.start.x, dy=pt.y-drag.start.y, o=drag.orig, r=rooms[drag.id];
-  if(drag.mode==="move"){r.x=snap(o.x+dx);r.y=snap(o.y+dy);}
-  else if(drag.mode==="e"){r.w=Math.max(0.5,snap(o.w+dx));}
-  else if(drag.mode==="w"){const nx=snap(o.x+dx);r.w=Math.max(0.5,r2(o.x+o.w-nx));r.x=r2(o.x+o.w-r.w);}
-  else if(drag.mode==="n"){r.d=Math.max(0.5,snap(o.d+dy));}
-  else if(drag.mode==="s"){const ny=snap(o.y+dy);r.d=Math.max(0.5,r2(o.y+o.d-ny));r.y=r2(o.y+o.d-r.d);}
+  if(drag.mode==="box"){drag.cur=pt;renderPlan();return;}
+  const dx=pt.x-drag.start.x, dy=pt.y-drag.start.y;
+  if(drag.mode==="move"){
+    const sx=snap(dx), sy=snap(dy);
+    drag.ids.forEach(k=>{const o=drag.orig[k];rooms[k].x=r2(o.x+sx);rooms[k].y=r2(o.y+sy);});
+    Object.entries(drag.porig).forEach(([k,o])=>{pins[k].x=r2(o.x+sx);pins[k].y=r2(o.y+sy);});
+    renderPlan();return;
+  }
+  const o=drag.orig, r=rooms[drag.id];
+  if(drag.mode==="e"){r.w=Math.max(0.1,snap(o.w+dx));}
+  else if(drag.mode==="w"){const nx=snap(o.x+dx);r.w=Math.max(0.1,r2(o.x+o.w-nx));r.x=r2(o.x+o.w-r.w);}
+  else if(drag.mode==="n"){r.d=Math.max(0.1,snap(o.d+dy));}
+  else if(drag.mode==="s"){const ny=snap(o.y+dy);r.d=Math.max(0.1,r2(o.y+o.d-ny));r.y=r2(o.y+o.d-r.d);}
   r.x=r2(r.x);r.y=r2(r.y);r.w=r2(r.w);r.d=r2(r.d);
   renderPlan();
 });
 svg.addEventListener('pointerup',()=>{
-  if(!drag)return; const rid=drag.id, r=rooms[rid], o=drag.orig; drag=null;
+  if(!drag)return; const d=drag; drag=null;
+  if(d.mode==="box"){
+    if(!d.cur||Math.hypot(d.cur.x-d.start.x,d.cur.y-d.start.y)<0.15){if(!d.add)setSel([]);renderAll();return;}
+    const x0=Math.min(d.start.x,d.cur.x),x1=Math.max(d.start.x,d.cur.x),y0=Math.min(d.start.y,d.cur.y),y1=Math.max(d.start.y,d.cur.y);
+    const hit=Object.keys(rooms).filter(k=>{const r=rooms[k];return selectable(k)&&r.x<x1&&r.x+r.w>x0&&r.y<y1&&r.y+r.d>y0;});
+    setSel(d.add?[...selSet,...hit]:hit);
+    st.textContent=selSet.size?`${selSet.size}개 선택. 끌거나 방향키로 같이 옮겨요`:"";
+    renderAll();return;
+  }
+  if(d.mode==="move"){
+    moveCommit(d.ids,d.orig,d.porig);renderAll();return;
+  }
+  const rid=d.id, r=rooms[rid], o=d.orig;
   if(r.x!==o.x||r.y!==o.y||r.w!==o.w||r.d!==o.d){
     const patch={x:r.x,y:r.y,w:r.w,d:r.d};
     if(r.w!==o.w&&r.meas&&r.meas.w){patch.meas={...r.meas,w:false};r.meas=patch.meas;}
@@ -118,18 +185,55 @@ svg.addEventListener('pointerup',()=>{
   }
   renderAll();
 });
-document.addEventListener('keydown',e=>{if(e.key==="Escape"){pinStage=null;selPhoto=null;renderAll();}});
+function moveCommit(ids,orig,porig){
+  // 저장할 때마다 상태가 새로 들어오니, 바뀔 값을 먼저 모아 두고 저장해요.
+  const w=[];
+  ids.forEach(k=>{const r=rooms[k],o=orig[k];if(r&&(r.x!==o.x||r.y!==o.y))w.push(["rooms",k,{x:r.x,y:r.y}]);});
+  Object.entries(porig).forEach(([k,o])=>{const p=pins[k];if(p&&(p.x!==o.x||p.y!==o.y))w.push(["pins",k,{x:p.x,y:p.y}]);});
+  w.forEach(([c,k,v])=>save(c,k,v));
+}
+function nudge(dx,dy){
+  if(!selSet.size)return; const orig={},porig={};
+  selSet.forEach(k=>{orig[k]={x:rooms[k].x,y:rooms[k].y};rooms[k].x=r2(rooms[k].x+dx);rooms[k].y=r2(rooms[k].y+dy);});
+  pinsOf(selSet).forEach(k=>{porig[k]={x:pins[k].x,y:pins[k].y};pins[k].x=r2(pins[k].x+dx);pins[k].y=r2(pins[k].y+dy);});
+  moveCommit(selSet,orig,porig);renderAll();
+}
+function selectAll(){if(view==="3d")return;setSel(Object.keys(rooms).filter(k=>String(rooms[k].floor)===view));st.textContent=`${view}층 방 ${selSet.size}개 선택. 끌거나 방향키로 같이 옮겨요 (대지 요소는 Shift+클릭으로 추가)`;renderAll();}
+document.addEventListener('keydown',e=>{
+  const typing=/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||""));
+  const mod=e.metaKey||e.ctrlKey;
+  if(mod&&!typing&&e.key.toLowerCase()==="z"){e.preventDefault();e.shiftKey?redo():undo();return;}
+  if(mod&&!typing&&e.key.toLowerCase()==="y"){e.preventDefault();redo();return;}
+  if(mod&&!typing&&e.key.toLowerCase()==="a"&&view!=="3d"){e.preventDefault();selectAll();return;}
+  if(e.key==="Escape"){pinStage=null;selPhoto=null;setSel([]);renderAll();return;}
+  if(typing||view==="3d")return;
+  const step=e.shiftKey?0.5:0.05, mv={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,step],ArrowDown:[0,-step]}[e.key];
+  if(mv&&selSet.size){e.preventDefault();nudge(...mv);}
+});
 
 /* ---------- inspector ---------- */
 function renderInspector(){
   const box=document.getElementById('insp');
+  if(selSet.size>1){
+    const ids=[...selSet];const np=pinsOf(selSet).length;
+    box.innerHTML=`<p style="margin:0 0 8px"><b>${ids.length}개 선택</b> <span class="muted">· 사진 핀 ${np}개 같이 움직여요</span></p>
+    <p class="muted" style="font-size:.82rem;margin:0 0 8px">${ids.map(k=>esc(rooms[k].name||siteOf(rooms[k]).label)).join(", ")}</p>
+    <div class="grid2"><label class="f">X 이동 m<input type="number" step="0.05" id="g-dx" value="0"></label><label class="f">Y 이동 m<input type="number" step="0.05" id="g-dy" value="0"></label></div>
+    <div class="row" style="margin-top:8px"><button class="btn primary" type="button" id="g-go">이만큼 옮기기</button><button class="btn" type="button" id="g-clear">선택 해제</button></div>
+    <p class="muted" style="font-size:.8rem;margin:8px 0 0">평면에서 끌거나 방향키(Shift는 50cm)로도 옮겨요. 실수하면 되돌리기(⌘Z / Ctrl+Z).</p>`;
+    box.querySelector('#g-go').addEventListener('click',()=>{const dx=r2(parseFloat(box.querySelector('#g-dx').value)||0),dy=r2(parseFloat(box.querySelector('#g-dy').value)||0);if(dx||dy)nudge(dx,dy);});
+    box.querySelector('#g-clear').addEventListener('click',()=>{setSel([]);renderAll();});
+    return;
+  }
   const r=sel&&rooms[sel];
   if(!r){box.innerHTML='<p class="empty-note">평면에서 방을 누르면 여기서 이름과 치수를 고칠 수 있어요.</p>';return;}
   const m=r.meas||{}, est=r.est||{};
   const photosIn=Object.entries(pins).filter(([,p])=>p.room===sel).map(([id])=>id);
   box.innerHTML=`
   <div class="grid2"><label class="f">이름<input type="text" id="i-name" value="${esc(r.name)}"></label>
-  <label class="f">층<select id="i-floor"><option value="1"${r.floor=="1"?" selected":""}>1층</option><option value="2"${r.floor=="2"?" selected":""}>2층</option></select></label></div>
+  <label class="f">층<select id="i-floor"><option value="1"${r.floor=="1"?" selected":""}>1층</option><option value="2"${r.floor=="2"?" selected":""}>2층</option><option value="site"${r.floor=="site"?" selected":""}>대지(담장·마당 등)</option></select></label></div>
+  ${r.floor==="site"?`<div class="grid2" style="margin-top:8px"><label class="f">종류<select id="i-type">${Object.entries(SITE).map(([k,v])=>`<option value="${k}"${r.type===k?" selected":""}>${v.label}</option>`).join("")}</select></label>
+  <label class="f">높이 m (3D)<input type="number" step="0.1" id="i-h" value="${r.h??siteOf(r).h}"></label></div>`:""}
   <div class="grid4" style="margin-top:8px">
     <label class="f">X (왼→오)<input type="number" step="0.05" id="i-x" value="${r.x}"></label>
     <label class="f">Y (앞→뒤)<input type="number" step="0.05" id="i-y" value="${r.y}"></label>
@@ -148,6 +252,8 @@ function renderInspector(){
   box.querySelector('#i-name').addEventListener('change',e=>upd("name",e.target.value));
   box.querySelector('#i-floor').addEventListener('change',e=>upd("floor",e.target.value));
   box.querySelector('#i-note').addEventListener('change',e=>upd("note",e.target.value));
+  const ty=box.querySelector('#i-type'); if(ty)ty.addEventListener('change',e=>{upd("type",e.target.value);renderInspector();});
+  const ih=box.querySelector('#i-h'); if(ih)ih.addEventListener('change',e=>{const v=r2(parseFloat(e.target.value));if(!isNaN(v))upd("h",v);});
   ["x","y","w","d"].forEach(k=>box.querySelector('#i-'+k).addEventListener('change',e=>{const v=r2(parseFloat(e.target.value));if(!isNaN(v))upd(k,v);}));
   box.querySelector('#m-apply').addEventListener('click',()=>{
     const mw=parseFloat(box.querySelector('#m-w').value), md=parseFloat(box.querySelector('#m-d').value);
@@ -155,7 +261,7 @@ function renderInspector(){
   });
   box.querySelector('#i-del').addEventListener('click',e=>{
     if(e.target.dataset.c!=="1"){e.target.dataset.c="1";e.target.textContent="한 번 더 누르면 삭제";return;}
-    const id=sel;delete rooms[id];sel=null;remove("rooms",id);renderAll();
+    const id=sel;delete rooms[id];setSel([]);remove("rooms",id);renderAll();
   });
 }
 // 실측 반영: 방 크기를 실측값으로 바꾸고, 같은 층에서 이 방의 오른쪽(뒤쪽) 변 이후에 시작하는 방들을 차이만큼 같이 이동
@@ -178,18 +284,26 @@ function applyMeasure(id,mw,md,push){
 document.getElementById('addRoom').addEventListener('click',()=>{
   const f=view==="3d"?"1":view; const id="r"+Date.now().toString(36);
   const doc={floor:f,name:"새 방",x:1,y:1,w:3,d:3,est:{w:3,d:3},meas:{},note:""};
-  rooms[id]=doc; sel=id; save("rooms",id,doc,"set"); if(view==="3d")setView(f); renderAll();
+  rooms[id]=doc; setSel([id]); save("rooms",id,doc,"set"); if(view==="3d")setView(f); renderAll();
+});
+document.getElementById('addSite').addEventListener('change',e=>{
+  const t=e.target.value; e.target.value=""; if(!t)return;
+  const id="s"+Date.now().toString(36), L=meta.lotW||12;
+  const size={wall:[3,0.2],yard:[4,4],parking:[2.5,5],stair:[1,3],etc:[2,2]}[t];
+  const doc={floor:"site",type:t,name:SITE[t].label,x:1,y:-0.5+(t==="wall"?0:1),w:size[0],d:size[1],est:{w:size[0],d:size[1]},meas:{},note:"위치·크기 가정"};
+  if(view!=="1")setView("1");
+  rooms[id]=doc; setSel([id]); save("rooms",id,doc,"set"); renderAll();
 });
 
 /* ---------- lists ---------- */
 function renderList(){
   const tb=document.getElementById('roomList');
   const all=Object.entries(rooms).sort((a,b)=>String(a[1].floor).localeCompare(String(b[1].floor))||a[1].y-b[1].y||a[1].x-b[1].x);
-  tb.innerHTML=all.length?all.map(([id,r])=>{const m=r.meas||{};const s=m.w&&m.d?'<span class="tag m">실측</span>':(m.w||m.d)?'<span class="tag m">일부</span>':'<span class="tag e">추정</span>';
-    return `<tr data-id="${id}" class="${sel===id?'sel':''}"><td>${r.floor}층</td><td>${esc(r.name)}</td><td>${r.w.toFixed(2)}</td><td>${r.d.toFixed(2)}</td><td>${(r.w*r.d).toFixed(1)}</td><td>${s}</td></tr>`}).join("")
+  tb.innerHTML=all.length?all.map(([id,r])=>{const m=r.meas||{};const s=r.floor==="site"?'<span class="tag e">'+siteOf(r).label+'</span>':m.w&&m.d?'<span class="tag m">실측</span>':(m.w||m.d)?'<span class="tag m">일부</span>':'<span class="tag e">추정</span>';
+    return `<tr data-id="${id}" class="${selSet.has(id)?'sel':''}"><td>${r.floor==="site"?"대지":r.floor+"층"}</td><td>${esc(r.name||siteOf(r).label)}</td><td>${r.w.toFixed(2)}</td><td>${r.d.toFixed(2)}</td><td>${(r.w*r.d).toFixed(1)}</td><td>${s}</td></tr>`}).join("")
     :'<tr><td colspan="6" class="empty-note">아직 방이 없어요. 평면도를 받으면 채워 넣을게요. 직접 "+ 방 추가"로 그려도 돼요.</td></tr>';
 }
-document.getElementById('roomList').addEventListener('click',e=>{const tr=e.target.closest('tr[data-id]');if(!tr)return;sel=tr.dataset.id;setView(String(rooms[sel].floor));});
+document.getElementById('roomList').addEventListener('click',e=>{const tr=e.target.closest('tr[data-id]');if(!tr)return;const id=tr.dataset.id;const f=String(rooms[id].floor);setView(f==="site"?"1":f);setSel([id]);renderAll();});
 function renderSummary(){
   const out=[];
   ["1","2"].forEach(f=>{const rs=floorRooms(f);const a=rs.reduce((s,r)=>s+r.w*r.d,0);
@@ -260,7 +374,12 @@ function build3d(){
   // 3D axes: x = plan x, z = plan y (뒤쪽), y = up
   const ground=new THREE.Mesh(new THREE.PlaneGeometry(meta.lotW||12,meta.lotD||13),new THREE.MeshLambertMaterial({color:0xb9c39a,transparent:true,opacity:.35,side:THREE.DoubleSide}));
   ground.rotation.x=-Math.PI/2;ground.position.set((meta.lotW||12)/2,-0.01,(meta.lotD||13)/2);group.add(ground);
-  Object.values(rooms).forEach(r=>{
+  Object.values(rooms).filter(r=>r.floor==="site").forEach(r=>{
+    const k=siteOf(r), h=r.h??k.h;
+    const mesh=new THREE.Mesh(new THREE.BoxGeometry(r.w,Math.max(h,0.03),r.d),new THREE.MeshLambertMaterial({color:k.c3,transparent:h<=0,opacity:h>0?1:.55}));
+    mesh.position.set(r.x+r.w/2,Math.max(h,0.03)/2,r.y+r.d/2);group.add(mesh);
+  });
+  Object.values(rooms).filter(r=>r.floor!=="site").forEach(r=>{
     const f=String(r.floor),base=z0[f],h=H[f],col=new THREE.Color(cssv(f==="1"?'--f1':'--f2'));
     const slab=new THREE.Mesh(new THREE.BoxGeometry(r.w,0.06,r.d),new THREE.MeshLambertMaterial({color:col,transparent:true,opacity:.55}));
     slab.position.set(r.x+r.w/2,base,r.y+r.d/2);group.add(slab);
@@ -283,7 +402,7 @@ function build3d(){
 function setView(v){
   view=v; document.querySelectorAll('[data-v]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.v===v));
   const is3=v==="3d"; svg.toggleAttribute('hidden',is3); document.getElementById('three').hidden=!is3;
-  document.getElementById('hint').textContent=is3?"끌어서 돌리고, 휠이나 두 손가락으로 확대해요. 원뿔(사진 핀)을 누르면 사진이 열려요.":"방을 끌어서 옮기고, 선택한 방의 노란 점을 끌어서 크기를 바꿔요. 아래 사진을 고른 뒤 평면을 누르면 핀이 꽂히고, 한 번 더 누르면 바라보는 방향이 정해져요.";
+  document.getElementById('hint').textContent=is3?"끌어서 돌리고, 휠이나 두 손가락으로 확대해요. 원뿔(사진 핀)을 누르면 사진이 열려요.":"방을 끌어서 옮기고, 노란 점으로 크기를 바꿔요. 빈 곳을 끌거나 Shift+클릭하면 여러 개를 골라 같이 옮겨요(방향키도 돼요). 실수하면 ⌘Z / Ctrl+Z. 사진을 고른 뒤 평면을 누르면 핀이 꽂혀요.";
   if(is3){init3d();build3d();}
   renderAll();
 }
@@ -296,11 +415,11 @@ renderAll();
 Store.status=t=>{st.textContent=t;};
 function applyState(s){
   rooms=s.rooms||{}; pins=s.pins||{}; meta={h1:2.6,h2:2.6,slab:0.2,lotW:12,lotD:13,...(s.meta||{})};
-  if(sel&&!rooms[sel])sel=null;
+  selSet=new Set([...selSet].filter(k=>rooms[k])); if(sel&&!rooms[sel])sel=null;
 }
 const editingNow=()=>drag||pinStage||(document.activeElement&&document.getElementById('insp').contains(document.activeElement));
 Store.onChange(s=>{
-  if(drag){const keep=rooms[drag.id];applyState(s);rooms[drag.id]=keep;}else applyState(s);
+  if(drag&&drag.mode!=="box"){const ids=drag.ids?[...drag.ids]:[drag.id];const keep=ids.map(k=>[k,rooms[k]]);const pk=Object.keys(drag.porig||{}).map(k=>[k,pins[k]]);applyState(s);keep.forEach(([k,v])=>{if(v)rooms[k]=v;});pk.forEach(([k,v])=>{if(v)pins[k]=v;});}else applyState(s);
   renderAll(!!editingNow());
 });
 // 사진 파일 매칭: 원본 파일명(확장자 제외)이 같으면 같은 사진으로 봐요.
@@ -344,3 +463,6 @@ document.getElementById('importJson').addEventListener('change',async e=>{
     renderStrip();
   }
 })();
+document.getElementById('undo').addEventListener('click',undo);
+document.getElementById('redo').addEventListener('click',redo);
+document.getElementById('selAll').addEventListener('click',selectAll);

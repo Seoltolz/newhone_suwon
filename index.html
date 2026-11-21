@@ -19,7 +19,12 @@
     <button class="tab" type="button" id="v-2" data-v="2" aria-pressed="false">2층 평면</button>
     <button class="tab" type="button" id="v-3d" data-v="3d" aria-pressed="false">3D</button>
     <span style="width:8px"></span>
+    <button class="btn" type="button" id="undo" disabled title="되돌리기 (⌘Z / Ctrl+Z)">↶ 되돌리기</button>
+    <button class="btn" type="button" id="redo" disabled title="다시하기 (⇧⌘Z / Ctrl+Y)">↷ 다시하기</button>
+    <span style="width:8px"></span>
     <button class="btn" type="button" id="addRoom">+ 방 추가</button>
+    <select class="btn" id="addSite" aria-label="대지 요소 추가"><option value="">+ 담장·마당·주차</option><option value="wall">담장</option><option value="yard">마당</option><option value="parking">주차공간</option><option value="stair">외부계단</option><option value="etc">기타</option></select>
+    <button class="btn" type="button" id="selAll" title="⌘A / Ctrl+A">이 층 전체 선택</button>
     <button class="btn" type="button" id="exportJson">데이터 내보내기</button>
     <label class="btn filebtn" for="importJson">데이터 불러오기<input type="file" id="importJson" accept="application/json,.json"></label>
     <span class="status" id="status" aria-live="polite">불러오는 중…</span>
