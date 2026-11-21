@@ -77,3 +77,4 @@ dialog::backdrop{background:rgba(0,0,0,.78)}
 .ph.nofile span{position:static;margin:2px}
 .filebtn{position:relative;overflow:hidden}
 .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+select.btn{width:auto;appearance:auto}
