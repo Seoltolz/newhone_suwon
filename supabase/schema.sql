@@ -48,6 +48,11 @@ create policy items_anon_all on public.items for all to anon, authenticated usin
 drop policy if exists items_history_read on public.items_history;
 create policy items_history_read on public.items_history for select to anon, authenticated using (true);
 
+-- 새 Supabase 프로젝트는 테이블 권한을 자동으로 주지 않아서 명시적으로 부여해요.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on public.items to anon, authenticated;
+grant select on public.items_history to anon, authenticated;
+
 -- 4) 실시간 동기화 켜기 (다른 사람이 고친 내용이 바로 보이게)
 do $$ begin
   alter publication supabase_realtime add table public.items;

@@ -100,7 +100,7 @@
     get mode() { return mode; },
     status: () => {},
     async init() {
-      if (cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY && window.supabase) {
+      if (cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY && window.supabase && params.get("p")) {
         try { await initSupabase(); mode = "shared"; }
         catch (e) { console.error(e); Store.status("공유 저장소 연결 실패, 로컬 모드로 열었어요"); await initLocal(); mode = "local"; }
       } else {
